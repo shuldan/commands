@@ -7,11 +7,11 @@ func Handle[C Command](
 	d *Dispatcher,
 	handler Handler[C],
 ) error {
-	return HandleFunc2(d, handler.Handle)
+	return HandleFn(d, handler.Handle)
 }
 
-// HandleFunc2 регистрирует функцию-обработчик команды.
-func HandleFunc2[C Command](
+// HandleFn регистрирует функцию-обработчик команды.
+func HandleFn[C Command](
 	d *Dispatcher,
 	fn func(context.Context, C) (Result, error),
 ) error {

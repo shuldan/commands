@@ -70,7 +70,7 @@ func TestHandleFunc2_Success(t *testing.T) {
 	defer d.Close(context.Background())
 
 	var called bool
-	err := HandleFunc2(d, func(_ context.Context, c createCmd) (Result, error) {
+	err := HandleFn(d, func(_ context.Context, c createCmd) (Result, error) {
 		called = true
 		return BaseResult{Name: "ok"}, nil
 	})
@@ -96,9 +96,9 @@ func TestHandleFunc2_DuplicateRegistration(t *testing.T) {
 		return nil, nil
 	}
 
-	_ = HandleFunc2(d, fn)
+	_ = HandleFn(d, fn)
 
-	err := HandleFunc2(d, fn)
+	err := HandleFn(d, fn)
 	if !errors.Is(err, ErrHandlerExists) {
 		t.Errorf("expected ErrHandlerExists, got %v", err)
 	}
@@ -110,7 +110,7 @@ func TestOnResult_Success(t *testing.T) {
 	d := New(WithSyncMode())
 	defer d.Close(context.Background())
 
-	_ = HandleFunc2(d, func(_ context.Context, _ createCmd) (Result, error) {
+	_ = HandleFn(d, func(_ context.Context, _ createCmd) (Result, error) {
 		return createResult{
 			BaseResult: BaseResult{Name: "created"},
 			ID:         "42",
@@ -161,7 +161,7 @@ func TestOnResult_WithError(t *testing.T) {
 	defer d.Close(context.Background())
 
 	handlerErr := errors.New("create failed")
-	_ = HandleFunc2(d, func(_ context.Context, _ createCmd) (Result, error) {
+	_ = HandleFn(d, func(_ context.Context, _ createCmd) (Result, error) {
 		return nil, handlerErr
 	})
 
@@ -185,7 +185,7 @@ func TestOnResult_Struct(t *testing.T) {
 	d := New(WithSyncMode())
 	defer d.Close(context.Background())
 
-	_ = HandleFunc2(d, func(_ context.Context, _ createCmd) (Result, error) {
+	_ = HandleFn(d, func(_ context.Context, _ createCmd) (Result, error) {
 		return createResult{
 			BaseResult: BaseResult{Name: "created"},
 			ID:         "99",
@@ -221,7 +221,7 @@ func TestOnResultFunc_TypeMismatch(t *testing.T) {
 	d := New(WithSyncMode())
 	defer d.Close(context.Background())
 
-	_ = HandleFunc2(d, func(_ context.Context, _ createCmd) (Result, error) {
+	_ = HandleFn(d, func(_ context.Context, _ createCmd) (Result, error) {
 		return BaseResult{Name: "base"}, nil
 	})
 

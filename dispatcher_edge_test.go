@@ -25,7 +25,7 @@ func TestSend_IdempotencyStoreError(t *testing.T) {
 	)
 	defer d.Close(context.Background())
 
-	_ = HandleFunc2(d, func(_ context.Context, _ testCommand) (Result, error) {
+	_ = HandleFn(d, func(_ context.Context, _ testCommand) (Result, error) {
 		return nil, nil
 	})
 
@@ -57,7 +57,7 @@ func TestSend_IdempotencyMarkError(t *testing.T) {
 	)
 	defer d.Close(context.Background())
 
-	_ = HandleFunc2(d, func(_ context.Context, _ testCommand) (Result, error) {
+	_ = HandleFn(d, func(_ context.Context, _ testCommand) (Result, error) {
 		return nil, nil
 	})
 
@@ -120,7 +120,7 @@ func TestSend_ResultHandlerError(t *testing.T) {
 	d := New(WithSyncMode(), WithErrorHandler(eh))
 	defer d.Close(context.Background())
 
-	_ = HandleFunc2(d, func(_ context.Context, _ testCommand) (Result, error) {
+	_ = HandleFn(d, func(_ context.Context, _ testCommand) (Result, error) {
 		return BaseResult{Name: "ok"}, nil
 	})
 
@@ -158,7 +158,7 @@ func TestSend_AsyncTimeout(t *testing.T) {
 		WithPublishTimeout(10*time.Millisecond),
 	)
 
-	_ = HandleFunc2(d, func(_ context.Context, _ testCommand) (Result, error) {
+	_ = HandleFn(d, func(_ context.Context, _ testCommand) (Result, error) {
 		<-blocker
 		return nil, nil
 	})
@@ -184,7 +184,7 @@ func TestClose_AsyncOrdered(t *testing.T) {
 		WithOrderedDelivery(),
 	)
 
-	_ = HandleFunc2(d, func(_ context.Context, _ testCommand) (Result, error) {
+	_ = HandleFn(d, func(_ context.Context, _ testCommand) (Result, error) {
 		return nil, nil
 	})
 

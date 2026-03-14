@@ -63,7 +63,7 @@ func main() {
     bus := commands.New(commands.WithSyncMode())
     defer bus.Close(context.Background())
 
-    commands.HandleFunc2(bus, func(ctx context.Context, cmd CreateOrder) (commands.Result, error) {
+    commands.HandleFn(bus, func(ctx context.Context, cmd CreateOrder) (commands.Result, error) {
         fmt.Printf("Creating order %s for user %s, amount: %.2f\n",
             cmd.OrderID, cmd.UserID, cmd.Amount)
         return CreateOrderResult{
@@ -136,7 +136,7 @@ commands.Handle(bus, &CreateOrderHandler{repo: repo})
 ### Функциональный обработчик
 
 ```go
-commands.HandleFunc2(bus, func(ctx context.Context, cmd CreateOrder) (commands.Result, error) {
+commands.HandleFn(bus, func(ctx context.Context, cmd CreateOrder) (commands.Result, error) {
     return CreateOrderResult{OrderID: cmd.OrderID}, nil
 })
 ```
@@ -310,7 +310,7 @@ if err := bus.Close(ctx); err != nil {
 | Функция | Описание |
 |---|---|
 | `commands.Handle[C](bus, handler) error` | Структурный обработчик |
-| `commands.HandleFunc2[C](bus, fn) error` | Функциональный обработчик |
+| `commands.HandleFn[C](bus, fn) error` | Функциональный обработчик |
 | `commands.OnResult[R](bus, name, handler) error` | Обработчик результата |
 | `commands.OnResultFunc[R](bus, name, fn) error` | Функция-обработчик результата |
 

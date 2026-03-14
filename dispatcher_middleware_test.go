@@ -23,7 +23,7 @@ func TestSend_WithMiddleware(t *testing.T) {
 	d := New(WithSyncMode(), WithMiddleware(mw))
 	defer d.Close(context.Background())
 
-	_ = HandleFunc2(d, func(_ context.Context, _ testCommand) (Result, error) {
+	_ = HandleFn(d, func(_ context.Context, _ testCommand) (Result, error) {
 		order = append(order, "handler")
 		return nil, nil
 	})
@@ -58,7 +58,7 @@ func TestSend_MiddlewareCanShortCircuit(t *testing.T) {
 	d := New(WithSyncMode(), WithMiddleware(mw), WithErrorHandler(eh))
 	defer d.Close(context.Background())
 
-	_ = HandleFunc2(d, func(_ context.Context, _ testCommand) (Result, error) {
+	_ = HandleFn(d, func(_ context.Context, _ testCommand) (Result, error) {
 		t.Fatal("handler should not be called")
 		return nil, nil
 	})
@@ -89,7 +89,7 @@ func TestSend_MultipleMiddleware(t *testing.T) {
 	d := New(WithSyncMode(), WithMiddleware(makeMW("A"), makeMW("B")))
 	defer d.Close(context.Background())
 
-	_ = HandleFunc2(d, func(_ context.Context, _ testCommand) (Result, error) {
+	_ = HandleFn(d, func(_ context.Context, _ testCommand) (Result, error) {
 		order = append(order, "handler")
 		return nil, nil
 	})

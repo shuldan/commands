@@ -16,7 +16,7 @@ func TestSend_ConcurrentSend(t *testing.T) {
 	var count int32
 	var wg sync.WaitGroup
 
-	_ = HandleFunc2(d, func(_ context.Context, _ testCommand) (Result, error) {
+	_ = HandleFn(d, func(_ context.Context, _ testCommand) (Result, error) {
 		atomic.AddInt32(&count, 1)
 		wg.Done()
 		return nil, nil
@@ -47,7 +47,7 @@ func TestSend_ConcurrentRegisterAndSend(t *testing.T) {
 	d := New(WithSyncMode())
 	defer d.Close(context.Background())
 
-	_ = HandleFunc2(d, func(_ context.Context, _ testCommand) (Result, error) {
+	_ = HandleFn(d, func(_ context.Context, _ testCommand) (Result, error) {
 		return nil, nil
 	})
 

@@ -105,7 +105,7 @@ func TestSend_SyncSuccess(t *testing.T) {
 	defer d.Close(context.Background())
 
 	var called bool
-	err := HandleFunc2(d, func(_ context.Context, c testCommand) (Result, error) {
+	err := HandleFn(d, func(_ context.Context, c testCommand) (Result, error) {
 		called = true
 		return BaseResult{Name: "ok"}, nil
 	})
@@ -132,7 +132,7 @@ func TestSend_AsyncSuccess(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	_ = HandleFunc2(d, func(_ context.Context, c testCommand) (Result, error) {
+	_ = HandleFn(d, func(_ context.Context, c testCommand) (Result, error) {
 		wg.Done()
 		return nil, nil
 	})
@@ -159,7 +159,7 @@ func TestSend_AsyncOrdered(t *testing.T) {
 	var order []string
 	var wg sync.WaitGroup
 
-	_ = HandleFunc2(d, func(_ context.Context, c testCommand) (Result, error) {
+	_ = HandleFn(d, func(_ context.Context, c testCommand) (Result, error) {
 		mu.Lock()
 		order = append(order, c.BaseCommand.IdemKey)
 		mu.Unlock()
@@ -183,7 +183,7 @@ func TestSend_IdempotencyDuplicate(t *testing.T) {
 	defer d.Close(context.Background())
 
 	var count int32
-	_ = HandleFunc2(d, func(_ context.Context, c testCommand) (Result, error) {
+	_ = HandleFn(d, func(_ context.Context, c testCommand) (Result, error) {
 		atomic.AddInt32(&count, 1)
 		return nil, nil
 	})
@@ -205,7 +205,7 @@ func TestSend_HandlerPanic(t *testing.T) {
 	d := New(WithSyncMode(), WithPanicHandler(ph))
 	defer d.Close(context.Background())
 
-	_ = HandleFunc2(d, func(_ context.Context, _ testCommand) (Result, error) {
+	_ = HandleFn(d, func(_ context.Context, _ testCommand) (Result, error) {
 		panic("boom")
 	})
 
@@ -225,7 +225,7 @@ func TestSend_HandlerError(t *testing.T) {
 	d := New(WithSyncMode(), WithErrorHandler(eh))
 	defer d.Close(context.Background())
 
-	_ = HandleFunc2(d, func(_ context.Context, _ testCommand) (Result, error) {
+	_ = HandleFn(d, func(_ context.Context, _ testCommand) (Result, error) {
 		return nil, errors.New("fail")
 	})
 
@@ -259,7 +259,7 @@ func TestClose_AsyncGraceful(t *testing.T) {
 	d := New(WithAsyncMode(), WithWorkerCount(2))
 
 	var count int32
-	_ = HandleFunc2(d, func(_ context.Context, _ testCommand) (Result, error) {
+	_ = HandleFn(d, func(_ context.Context, _ testCommand) (Result, error) {
 		time.Sleep(10 * time.Millisecond)
 		atomic.AddInt32(&count, 1)
 		return nil, nil
@@ -283,7 +283,7 @@ func TestClose_ContextTimeout(t *testing.T) {
 
 	d := New(WithAsyncMode(), WithWorkerCount(1), WithBufferSize(1))
 
-	_ = HandleFunc2(d, func(_ context.Context, _ testCommand) (Result, error) {
+	_ = HandleFn(d, func(_ context.Context, _ testCommand) (Result, error) {
 		<-blocker
 		return nil, nil
 	})
@@ -308,7 +308,7 @@ func TestSend_MetricsDispatched(t *testing.T) {
 	d := New(WithSyncMode(), WithMetrics(m))
 	defer d.Close(context.Background())
 
-	_ = HandleFunc2(d, func(_ context.Context, _ testCommand) (Result, error) {
+	_ = HandleFn(d, func(_ context.Context, _ testCommand) (Result, error) {
 		return nil, nil
 	})
 
@@ -325,7 +325,7 @@ func TestSend_ResultDelivery(t *testing.T) {
 	d := New(WithSyncMode())
 	defer d.Close(context.Background())
 
-	_ = HandleFunc2(d, func(_ context.Context, _ testCommand) (Result, error) {
+	_ = HandleFn(d, func(_ context.Context, _ testCommand) (Result, error) {
 		return BaseResult{Name: "created"}, nil
 	})
 
@@ -353,7 +353,7 @@ func TestSend_ResultDelivery_Error(t *testing.T) {
 	defer d.Close(context.Background())
 
 	handlerErr := errors.New("handler fail")
-	_ = HandleFunc2(d, func(_ context.Context, _ testCommand) (Result, error) {
+	_ = HandleFn(d, func(_ context.Context, _ testCommand) (Result, error) {
 		return nil, handlerErr
 	})
 
@@ -381,7 +381,7 @@ func TestSend_ContextCancelled_Async(t *testing.T) {
 		WithBufferSize(1),
 	)
 
-	_ = HandleFunc2(d, func(_ context.Context, _ testCommand) (Result, error) {
+	_ = HandleFn(d, func(_ context.Context, _ testCommand) (Result, error) {
 		<-blocker
 		return nil, nil
 	})
