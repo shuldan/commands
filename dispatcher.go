@@ -159,7 +159,9 @@ func (d *Dispatcher) startWorkers() {
 		d.workerChans = make([]chan commandTask, d.opts.workerCount)
 
 		for i := range d.opts.workerCount {
-			d.workerChans[i] = make(chan commandTask, d.opts.bufferSize)
+			d.workerChans[i] = make(
+				chan commandTask, d.opts.bufferSize,
+			)
 			d.wg.Add(1)
 
 			go d.worker(d.workerChans[i])
@@ -249,10 +251,10 @@ func (d *Dispatcher) processCommand(task commandTask) {
 		return
 	}
 
-	result, handleErr := d.safeExecute(task)
-
 	start := time.Now()
+	result, handleErr := d.safeExecute(task)
 	duration := time.Since(start)
+
 	d.opts.metrics.CommandHandled(name, duration, handleErr)
 
 	if handleErr != nil {
