@@ -1,0 +1,85 @@
+version: "2"
+
+run:
+  timeout: 3m
+  concurrency: 4
+  new: true
+
+linters:
+  enable:
+    - govet
+    - errcheck
+    - staticcheck
+    - unused
+    - ineffassign
+    - misspell
+    - unconvert
+    - goconst
+    - gocritic
+    - nakedret
+    - prealloc
+    - dogsled
+    - funlen
+    - whitespace
+  disable:
+    - lll
+    - gocyclo
+    - godot
+    - depguard
+    - revive
+  exclusions:
+    paths:
+      - test/*
+
+linters-settings:
+  govet:
+    enable:
+      - shadow
+  gocritic:
+    enabled-tags:
+      - performance
+      - style
+    disabled-checks:
+      - hugeParam
+      - rangeValCopy
+  funlen:
+    lines: 60
+    statements: 40
+  whitespace:
+    multi-if: true
+    multi-func: true
+  dogsled:
+    max-blank-identifiers: 2
+  revive:
+    rules:
+      - name: package-comments
+        disabled: true
+      - name: exported
+        disabled: true
+      - name: unused-parameter
+      - name: empty-block
+      - name: error-return
+      - name: var-naming
+      - name: context-as-argument
+      - name: indent-error-flow
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    gofmt:
+      simplify: true
+    goimports:
+      local-prefixes: github.com/shuldan/commands
+
+issues:
+  exclude:
+    - "weak cryptographic primitive"
+    - "G101"
+  sort-by: path
+  max-per-linter: 0
+  max-same-issues: 0
+
+output:
+  format: tab
