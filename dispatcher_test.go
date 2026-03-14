@@ -330,7 +330,7 @@ func TestSend_ResultDelivery(t *testing.T) {
 	})
 
 	var gotResult Result
-	_ = OnResultFunc[BaseResult](d, "", func(_ context.Context, r BaseResult, _ error) error {
+	_ = OnResultFn[BaseResult](d, "", func(_ context.Context, r BaseResult, _ error) error {
 		gotResult = r
 		return nil
 	})
@@ -358,7 +358,7 @@ func TestSend_ResultDelivery_Error(t *testing.T) {
 	})
 
 	var gotErr error
-	_ = OnResultFunc[BaseResult](d, "", func(_ context.Context, _ BaseResult, err error) error {
+	_ = OnResultFn[BaseResult](d, "", func(_ context.Context, _ BaseResult, err error) error {
 		gotErr = err
 		return nil
 	})

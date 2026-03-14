@@ -124,7 +124,7 @@ func TestSend_ResultHandlerError(t *testing.T) {
 		return BaseResult{Name: "ok"}, nil
 	})
 
-	_ = OnResultFunc[BaseResult](d, "", func(_ context.Context, _ BaseResult, _ error) error {
+	_ = OnResultFn[BaseResult](d, "", func(_ context.Context, _ BaseResult, _ error) error {
 		return errors.New("result handler failed")
 	})
 

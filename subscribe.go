@@ -38,11 +38,11 @@ func OnResult[R Result](
 	commandName string,
 	handler ResultHandler[R],
 ) error {
-	return OnResultFunc(d, commandName, handler.Handle)
+	return OnResultFn(d, commandName, handler.Handle)
 }
 
-// OnResultFunc регистрирует функцию-обработчик результата.
-func OnResultFunc[R Result](
+// OnResultFn регистрирует функцию-обработчик результата.
+func OnResultFn[R Result](
 	d *Dispatcher,
 	commandName string,
 	fn func(context.Context, R, error) error,

@@ -118,7 +118,7 @@ func TestOnResult_Success(t *testing.T) {
 	})
 
 	var gotID string
-	err := OnResultFunc[createResult](d, "create",
+	err := OnResultFn[createResult](d, "create",
 		func(_ context.Context, r createResult, err error) error {
 			if err != nil {
 				return err
@@ -146,9 +146,9 @@ func TestOnResult_DuplicateRegistration(t *testing.T) {
 
 	fn := func(_ context.Context, _ createResult, _ error) error { return nil }
 
-	_ = OnResultFunc[createResult](d, "create", fn)
+	_ = OnResultFn[createResult](d, "create", fn)
 
-	err := OnResultFunc[createResult](d, "create", fn)
+	err := OnResultFn[createResult](d, "create", fn)
 	if !errors.Is(err, ErrResultHandlerExists) {
 		t.Errorf("expected ErrResultHandlerExists, got %v", err)
 	}
@@ -166,7 +166,7 @@ func TestOnResult_WithError(t *testing.T) {
 	})
 
 	var gotErr error
-	_ = OnResultFunc[createResult](d, "create",
+	_ = OnResultFn[createResult](d, "create",
 		func(_ context.Context, _ createResult, err error) error {
 			gotErr = err
 			return nil
@@ -230,7 +230,7 @@ func TestOnResultFunc_TypeMismatch(t *testing.T) {
 
 	d.opts.errorHandler = eh
 
-	_ = OnResultFunc[createResult](d, "create",
+	_ = OnResultFn[createResult](d, "create",
 		func(_ context.Context, _ createResult, _ error) error {
 			return nil
 		})

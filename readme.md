@@ -156,7 +156,7 @@ type Result interface {
 Подписка на результат:
 
 ```go
-commands.OnResultFunc[CreateOrderResult](bus, "order.create",
+commands.OnResultFn[CreateOrderResult](bus, "order.create",
     func(ctx context.Context, result CreateOrderResult, err error) error {
         if err != nil {
             log.Printf("order creation failed: %v", err)
@@ -312,7 +312,7 @@ if err := bus.Close(ctx); err != nil {
 | `commands.Handle[C](bus, handler) error` | Структурный обработчик |
 | `commands.HandleFn[C](bus, fn) error` | Функциональный обработчик |
 | `commands.OnResult[R](bus, name, handler) error` | Обработчик результата |
-| `commands.OnResultFunc[R](bus, name, fn) error` | Функция-обработчик результата |
+| `commands.OnResultFn[R](bus, name, fn) error` | Функция-обработчик результата |
 
 ### Опции
 
