@@ -6,20 +6,30 @@ GOLANGCI_LINT := $(GOBIN)/golangci-lint
 GOIMPORTS := $(GOBIN)/goimports
 GOSEC := $(GOBIN)/gosec
 
-install-tools: $(GOLANGCI_LINT) $(GOIMPORTS) $(GOSEC)
+GOLANGCI_LINT_VERSION := v2.4.0
+GOSEC_VERSION := v2.22.4
+
+install-tools:
+	@echo "Installing golangci-lint $(GOLANGCI_LINT_VERSION)..."
+	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | \
+		sh -s -- -b $(GOBIN) $(GOLANGCI_LINT_VERSION)
+	@echo "Installing goimports..."
+	@go install golang.org/x/tools/cmd/goimports@latest
+	@echo "Installing gosec $(GOSEC_VERSION)..."
+	@go install github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION)
 
 $(GOLANGCI_LINT):
-	@echo "Installing golangci-lint v2.4.0..."
+	@echo "Installing golangci-lint $(GOLANGCI_LINT_VERSION)..."
 	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | \
-		sh -s -- -b $(GOBIN) v2.4.0
+		sh -s -- -b $(GOBIN) $(GOLANGCI_LINT_VERSION)
 
 $(GOIMPORTS):
 	@echo "Installing goimports..."
 	@go install golang.org/x/tools/cmd/goimports@latest
 
 $(GOSEC):
-	@echo "Installing gosec..."
-	@go install github.com/securego/gosec/v2/cmd/gosec@latest
+	@echo "Installing gosec $(GOSEC_VERSION)..."
+	@go install github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION)
 
 lint: $(GOLANGCI_LINT)
 	@echo "Running golangci-lint..."
