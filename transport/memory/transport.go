@@ -26,7 +26,7 @@ func New() *Transport {
 }
 
 // Send delivers a command envelope to the subscribed command handler.
-func (t *Transport) Send(_ context.Context, env commands.CommandEnvelope) error {
+func (t *Transport) Send(ctx context.Context, env commands.CommandEnvelope) error {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -37,8 +37,7 @@ func (t *Transport) Send(_ context.Context, env commands.CommandEnvelope) error 
 		return fmt.Errorf("no command handler subscribed")
 	}
 
-	// Dispatch asynchronously to simulate real transport behavior.
-	go t.commandHandler.Handle(context.Background(), env)
+	go t.commandHandler.Handle(context.WithoutCancel(ctx), env)
 	return nil
 }
 
@@ -59,7 +58,7 @@ func (t *Transport) Subscribe(_ context.Context, handler commands.CommandHandler
 }
 
 // Reply delivers a reply envelope to the subscribed reply handler.
-func (t *Transport) Reply(_ context.Context, env commands.ReplyEnvelope) error {
+func (t *Transport) Reply(ctx context.Context, env commands.ReplyEnvelope) error {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -70,8 +69,7 @@ func (t *Transport) Reply(_ context.Context, env commands.ReplyEnvelope) error {
 		return fmt.Errorf("no reply handler subscribed")
 	}
 
-	// Dispatch asynchronously to simulate real transport behavior.
-	go t.replyHandler.Handle(context.Background(), env)
+	go t.replyHandler.Handle(context.WithoutCancel(ctx), env)
 	return nil
 }
 
