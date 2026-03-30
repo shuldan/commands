@@ -3,6 +3,7 @@ package kafka
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	kafkago "github.com/segmentio/kafka-go"
@@ -36,13 +37,19 @@ func (w *mockWriter) Close() error {
 }
 
 type mockReader struct {
-	mu       sync.Mutex
-	messages []kafkago.Message
-	idx      int
-	fetchErr error
-	commitCh chan kafkago.Message
-	closed   bool
-	closeErr error
+	mu        sync.Mutex
+	messages  []kafkago.Message
+	idx       int
+	fetchErr  error
+	commitErr error
+	commitCh  chan kafkago.Message
+	closed    bool
+	closeErr  error
+
+	// cancelAfterCommitErrors cancels context after this many commit errors.
+	cancelCtx             context.CancelFunc
+	commitErrorCount      atomic.Int32
+	cancelAfterCommitErrs int32
 }
 
 func newMockReader(msgs ...kafkago.Message) *mockReader {
@@ -76,9 +83,24 @@ func (r *mockReader) FetchMessage(ctx context.Context) (kafkago.Message, error) 
 	}
 }
 
-func (r *mockReader) CommitMessages(_ context.Context, msgs ...kafkago.Message) error {
+func (r *mockReader) CommitMessages(ctx context.Context, msgs ...kafkago.Message) error {
+	r.mu.Lock()
+	err := r.commitErr
+	r.mu.Unlock()
+
+	if err != nil {
+		count := r.commitErrorCount.Add(1)
+		if r.cancelAfterCommitErrs > 0 && count >= r.cancelAfterCommitErrs && r.cancelCtx != nil {
+			r.cancelCtx()
+		}
+		return err
+	}
 	for _, m := range msgs {
-		r.commitCh <- m
+		select {
+		case r.commitCh <- m:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	return nil
 }
@@ -88,6 +110,19 @@ func (r *mockReader) Close() error {
 	defer r.mu.Unlock()
 	r.closed = true
 	return r.closeErr
+}
+
+type mockDialer struct {
+	ensureErr error
+	checkErr  error
+}
+
+func (d *mockDialer) ensureTopics(_ Config) error {
+	return d.ensureErr
+}
+
+func (d *mockDialer) checkTopicsExist(_ Config) error {
+	return d.checkErr
 }
 
 type mockCommandHandler struct {
@@ -139,15 +174,16 @@ func testConfig() Config {
 
 func newTestTransport(cfg Config, w messageWriter, cmdReader, replyReader messageReader) *Transport {
 	cfg.withDefaults()
-	t := &Transport{
-		cfg:    cfg,
-		writer: w,
-		newCommandReader: func() messageReader {
-			return cmdReader
-		},
-		newReplyReader: func(_ string) messageReader {
-			return replyReader
-		},
+
+	var cmdReaderFn func() messageReader
+	if cmdReader != nil {
+		cmdReaderFn = func() messageReader { return cmdReader }
 	}
-	return t
+
+	var replyReaderFn func(string) messageReader
+	if replyReader != nil {
+		replyReaderFn = func(_ string) messageReader { return replyReader }
+	}
+
+	return newTransport(cfg, w, cmdReaderFn, replyReaderFn)
 }

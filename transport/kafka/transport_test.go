@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +12,112 @@ import (
 
 	"github.com/shuldan/commands"
 )
+
+// ── New / newWithDialer ──────────────────────────────────────────────
+
+func TestNew_ValidationError(t *testing.T) {
+	t.Parallel()
+	_, err := newWithDialer(Config{}, &mockDialer{})
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+}
+
+func TestNew_AutoCreateTopics_Success(t *testing.T) {
+	t.Parallel()
+	cfg := testConfig()
+	cfg.AutoCreateTopics = true
+
+	tr, err := newWithDialer(cfg, &mockDialer{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if tr == nil {
+		t.Fatal("expected non-nil transport")
+	}
+}
+
+func TestNew_AutoCreateTopics_Error(t *testing.T) {
+	t.Parallel()
+	cfg := testConfig()
+	cfg.AutoCreateTopics = true
+
+	_, err := newWithDialer(cfg, &mockDialer{ensureErr: fmt.Errorf("cannot create")})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "ensure topics") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestNew_CheckTopics_Success(t *testing.T) {
+	t.Parallel()
+	cfg := testConfig()
+	cfg.AutoCreateTopics = false
+
+	tr, err := newWithDialer(cfg, &mockDialer{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if tr == nil {
+		t.Fatal("expected non-nil transport")
+	}
+}
+
+func TestNew_CheckTopics_Error(t *testing.T) {
+	t.Parallel()
+	cfg := testConfig()
+	cfg.AutoCreateTopics = false
+
+	_, err := newWithDialer(cfg, &mockDialer{checkErr: fmt.Errorf("topic not found")})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestNew_AppliesDefaults(t *testing.T) {
+	t.Parallel()
+	cfg := Config{
+		Brokers:      []string{"localhost:9092"},
+		CommandTopic: "cmd",
+		ReplyTopic:   "reply",
+	}
+	tr, err := newWithDialer(cfg, &mockDialer{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if tr.cfg.NumPartitions != 1 {
+		t.Errorf("expected NumPartitions=1, got %d", tr.cfg.NumPartitions)
+	}
+	if tr.cfg.WriteTimeout != 10*time.Second {
+		t.Errorf("expected WriteTimeout=10s, got %v", tr.cfg.WriteTimeout)
+	}
+}
+
+func TestNewTransport_WithNilDeps(t *testing.T) {
+	t.Parallel()
+	cfg := testConfig()
+	cfg.withDefaults()
+
+	// Calling with nil deps should not panic — it creates real kafka objects.
+	// We just verify the transport is constructed and has non-nil fields.
+	tr := newTransport(cfg, nil, nil, nil)
+	if tr == nil {
+		t.Fatal("expected non-nil transport")
+	}
+	if tr.writer == nil {
+		t.Error("expected non-nil writer")
+	}
+	if tr.newCommandReader == nil {
+		t.Error("expected non-nil newCommandReader")
+	}
+	if tr.newReplyReader == nil {
+		t.Error("expected non-nil newReplyReader")
+	}
+}
+
+// ── Send ─────────────────────────────────────────────────────────────
 
 func TestSend_WhenClosed(t *testing.T) {
 	t.Parallel()
@@ -62,6 +169,8 @@ func TestSend_Success(t *testing.T) {
 	}
 }
 
+// ── Reply ────────────────────────────────────────────────────────────
+
 func TestReply_WhenClosed(t *testing.T) {
 	t.Parallel()
 	w := &mockWriter{}
@@ -95,6 +204,24 @@ func TestReply_Success(t *testing.T) {
 		t.Fatalf("expected 1 message, got %d", len(w.messages))
 	}
 }
+
+func TestReply_WriterError(t *testing.T) {
+	t.Parallel()
+	w := &mockWriter{err: fmt.Errorf("write failed")}
+	tr := newTestTransport(testConfig(), w, nil, nil)
+
+	env := commands.ReplyEnvelope{
+		CorrelationID: "c1",
+		ResultName:    "Res",
+		Payload:       []byte("result"),
+	}
+	err := tr.Reply(context.Background(), env)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+// ── Subscribe ────────────────────────────────────────────────────────
 
 func TestSubscribe_WhenClosed(t *testing.T) {
 	t.Parallel()
@@ -174,6 +301,8 @@ func TestSubscribe_DeliversCommands(t *testing.T) {
 	tr.wg.Wait()
 }
 
+// ── SubscribeReplies ─────────────────────────────────────────────────
+
 func TestSubscribeReplies_WhenClosed(t *testing.T) {
 	t.Parallel()
 	tr := newTestTransport(testConfig(), &mockWriter{}, nil, newMockReader())
@@ -238,6 +367,8 @@ func TestSubscribeReplies_DeliversReplies(t *testing.T) {
 	tr.wg.Wait()
 }
 
+// ── ReplyAddress ─────────────────────────────────────────────────────
+
 func TestReplyAddress(t *testing.T) {
 	t.Parallel()
 	tr := newTestTransport(testConfig(), &mockWriter{}, nil, nil)
@@ -245,6 +376,8 @@ func TestReplyAddress(t *testing.T) {
 		t.Errorf("expected test-replies, got %s", tr.ReplyAddress())
 	}
 }
+
+// ── Close ────────────────────────────────────────────────────────────
 
 func TestClose_WhenAlreadyClosed(t *testing.T) {
 	t.Parallel()
@@ -317,6 +450,19 @@ func TestClose_NoReadersNil(t *testing.T) {
 	}
 }
 
+func TestClose_WriterError(t *testing.T) {
+	t.Parallel()
+	w := &mockWriter{closeErr: fmt.Errorf("writer close err")}
+	tr := newTestTransport(testConfig(), w, nil, nil)
+
+	err := tr.Close(context.Background())
+	if err == nil {
+		t.Fatal("expected error from writer close")
+	}
+}
+
+// ── readCommands edge cases ──────────────────────────────────────────
+
 func TestReadCommands_SkipOnFetchError(t *testing.T) {
 	t.Parallel()
 	reader := newMockReader()
@@ -339,6 +485,108 @@ func TestReadCommands_SkipOnFetchError(t *testing.T) {
 	handler.mu.Unlock()
 	if count != 0 {
 		t.Errorf("expected 0 commands delivered, got %d", count)
+	}
+}
+
+func TestReadCommands_CommitError_ContinuesProcessing(t *testing.T) {
+	t.Parallel()
+	msg1 := kafkago.Message{
+		Value: []byte("p1"),
+		Headers: []kafkago.Header{
+			{Key: headerCorrelationID, Value: []byte("c1")},
+			{Key: headerCommandName, Value: []byte("Cmd1")},
+		},
+	}
+	msg2 := kafkago.Message{
+		Value: []byte("p2"),
+		Headers: []kafkago.Header{
+			{Key: headerCorrelationID, Value: []byte("c2")},
+			{Key: headerCommandName, Value: []byte("Cmd2")},
+		},
+	}
+	reader := newMockReader(msg1, msg2)
+	reader.commitErr = fmt.Errorf("commit failed")
+
+	handler := newMockCommandHandler()
+	tr := newTestTransport(testConfig(), &mockWriter{}, reader, nil)
+	tr.commandHandler = handler
+	tr.commandReader = reader
+
+	ctx, cancel := context.WithCancel(context.Background())
+	tr.wg.Add(1)
+	go tr.readCommands(ctx)
+
+	for i := range 2 {
+		select {
+		case <-handler.ch:
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for command %d", i+1)
+		}
+	}
+
+	cancel()
+	tr.wg.Wait()
+
+	handler.mu.Lock()
+	count := len(handler.received)
+	handler.mu.Unlock()
+	if count != 2 {
+		t.Errorf("expected 2 commands, got %d", count)
+	}
+}
+
+func TestReadCommands_CommitError_ContextCancelled(t *testing.T) {
+	t.Parallel()
+	msg := kafkago.Message{
+		Value: []byte("p1"),
+		Headers: []kafkago.Header{
+			{Key: headerCorrelationID, Value: []byte("c1")},
+			{Key: headerCommandName, Value: []byte("Cmd")},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	reader := newMockReader(msg)
+	reader.commitErr = fmt.Errorf("commit failed")
+	reader.cancelCtx = cancel
+	reader.cancelAfterCommitErrs = 1
+
+	handler := newMockCommandHandler()
+	tr := newTestTransport(testConfig(), &mockWriter{}, reader, nil)
+	tr.commandHandler = handler
+	tr.commandReader = reader
+
+	tr.wg.Add(1)
+	go tr.readCommands(ctx)
+
+	tr.wg.Wait() // should exit because context gets cancelled on commit error
+}
+
+// ── readReplies edge cases ───────────────────────────────────────────
+
+func TestReadReplies_SkipOnFetchError(t *testing.T) {
+	t.Parallel()
+	reader := newMockReader()
+	reader.fetchErr = fmt.Errorf("transient")
+	handler := newMockReplyHandler()
+	tr := newTestTransport(testConfig(), &mockWriter{}, nil, reader)
+	tr.replyHandler = handler
+	tr.replyReader = reader
+
+	ctx, cancel := context.WithCancel(context.Background())
+	tr.wg.Add(1)
+	go tr.readReplies(ctx)
+
+	time.Sleep(150 * time.Millisecond)
+	cancel()
+	tr.wg.Wait()
+
+	handler.mu.Lock()
+	count := len(handler.received)
+	handler.mu.Unlock()
+	if count != 0 {
+		t.Errorf("expected 0 replies delivered, got %d", count)
 	}
 }
 
@@ -381,16 +629,82 @@ func TestReadReplies_SkipMalformed(t *testing.T) {
 	tr.wg.Wait()
 }
 
-func TestClose_WriterError(t *testing.T) {
+func TestReadReplies_CommitError_ContinuesProcessing(t *testing.T) {
 	t.Parallel()
-	w := &mockWriter{closeErr: fmt.Errorf("writer close err")}
-	tr := newTestTransport(testConfig(), w, nil, nil)
+	msg1 := kafkago.Message{
+		Value: []byte("r1"),
+		Headers: []kafkago.Header{
+			{Key: headerCorrelationID, Value: []byte("c1")},
+			{Key: headerResultName, Value: []byte("Res1")},
+		},
+	}
+	msg2 := kafkago.Message{
+		Value: []byte("r2"),
+		Headers: []kafkago.Header{
+			{Key: headerCorrelationID, Value: []byte("c2")},
+			{Key: headerResultName, Value: []byte("Res2")},
+		},
+	}
+	reader := newMockReader(msg1, msg2)
+	reader.commitErr = fmt.Errorf("commit failed")
 
-	err := tr.Close(context.Background())
-	if err == nil {
-		t.Fatal("expected error from writer close")
+	handler := newMockReplyHandler()
+	tr := newTestTransport(testConfig(), &mockWriter{}, nil, reader)
+	tr.replyHandler = handler
+	tr.replyReader = reader
+
+	ctx, cancel := context.WithCancel(context.Background())
+	tr.wg.Add(1)
+	go tr.readReplies(ctx)
+
+	for i := range 2 {
+		select {
+		case <-handler.ch:
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for reply %d", i+1)
+		}
+	}
+
+	cancel()
+	tr.wg.Wait()
+
+	handler.mu.Lock()
+	count := len(handler.received)
+	handler.mu.Unlock()
+	if count != 2 {
+		t.Errorf("expected 2 replies, got %d", count)
 	}
 }
+
+func TestReadReplies_CommitError_ContextCancelled(t *testing.T) {
+	t.Parallel()
+	msg := kafkago.Message{
+		Value: []byte("r1"),
+		Headers: []kafkago.Header{
+			{Key: headerCorrelationID, Value: []byte("c1")},
+			{Key: headerResultName, Value: []byte("Res")},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	reader := newMockReader(msg)
+	reader.commitErr = fmt.Errorf("commit failed")
+	reader.cancelCtx = cancel
+	reader.cancelAfterCommitErrs = 1
+
+	handler := newMockReplyHandler()
+	tr := newTestTransport(testConfig(), &mockWriter{}, nil, reader)
+	tr.replyHandler = handler
+	tr.replyReader = reader
+
+	tr.wg.Add(1)
+	go tr.readReplies(ctx)
+
+	tr.wg.Wait() // should exit because context gets cancelled on commit error
+}
+
+// ── generateInstanceID ───────────────────────────────────────────────
 
 func TestGenerateInstanceID_Unique(t *testing.T) {
 	t.Parallel()

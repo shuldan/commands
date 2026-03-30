@@ -15,6 +15,77 @@ import (
 	"github.com/shuldan/commands"
 )
 
+// dialer abstracts Kafka broker connections for testing.
+type dialer interface {
+	ensureTopics(cfg Config) error
+	checkTopicsExist(cfg Config) error
+}
+
+// kafkaDialer is the production implementation using real Kafka connections.
+type kafkaDialer struct{}
+
+func (d *kafkaDialer) ensureTopics(cfg Config) error {
+	conn, err := kafkago.Dial("tcp", cfg.Brokers[0])
+	if err != nil {
+		return fmt.Errorf("dial broker: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	controller, err := conn.Controller()
+	if err != nil {
+		return fmt.Errorf("get controller: %w", err)
+	}
+
+	controllerConn, err := kafkago.Dial("tcp", net.JoinHostPort(controller.Host, strconv.Itoa(controller.Port)))
+	if err != nil {
+		return fmt.Errorf("dial controller: %w", err)
+	}
+	defer func() { _ = controllerConn.Close() }()
+
+	topics := []kafkago.TopicConfig{
+		{
+			Topic:             cfg.CommandTopic,
+			NumPartitions:     cfg.NumPartitions,
+			ReplicationFactor: cfg.ReplicationFactor,
+		},
+		{
+			Topic:             cfg.ReplyTopic,
+			NumPartitions:     cfg.NumPartitions,
+			ReplicationFactor: cfg.ReplicationFactor,
+		},
+	}
+
+	return controllerConn.CreateTopics(topics...)
+}
+
+func (d *kafkaDialer) checkTopicsExist(cfg Config) error {
+	conn, err := kafkago.Dial("tcp", cfg.Brokers[0])
+	if err != nil {
+		return fmt.Errorf("dial broker: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	partitions, err := conn.ReadPartitions()
+	if err != nil {
+		return fmt.Errorf("read partitions: %w", err)
+	}
+
+	existing := make(map[string]bool)
+	for _, p := range partitions {
+		existing[p.Topic] = true
+	}
+
+	if !existing[cfg.CommandTopic] {
+		return fmt.Errorf("%w: %s", ErrTopicNotFound, cfg.CommandTopic)
+	}
+	if !existing[cfg.ReplyTopic] {
+		return fmt.Errorf("%w: %s", ErrTopicNotFound, cfg.ReplyTopic)
+	}
+
+	return nil
+}
+
+// Transport is a Kafka implementation of commands.Transport.
 type Transport struct {
 	cfg    Config
 	writer messageWriter
@@ -33,59 +104,74 @@ type Transport struct {
 	newReplyReader   func(groupID string) messageReader
 }
 
+// New creates a new Kafka transport with real Kafka connections.
 func New(cfg Config) (*Transport, error) {
+	return newWithDialer(cfg, &kafkaDialer{})
+}
+
+func newWithDialer(cfg Config, d dialer) (*Transport, error) {
 	cfg.withDefaults()
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
 
 	if cfg.AutoCreateTopics {
-		if err := ensureTopics(cfg); err != nil {
+		if err := d.ensureTopics(cfg); err != nil {
 			return nil, fmt.Errorf("ensure topics: %w", err)
 		}
 	} else {
-		if err := checkTopicsExist(cfg); err != nil {
+		if err := d.checkTopicsExist(cfg); err != nil {
 			return nil, err
 		}
 	}
 
-	return newTransport(cfg), nil
+	return newTransport(cfg, nil, nil, nil), nil
 }
 
-func newTransport(cfg Config) *Transport {
-	writer := &kafkago.Writer{
-		Addr:         kafkago.TCP(cfg.Brokers...),
-		Balancer:     &kafkago.RoundRobin{},
-		WriteTimeout: cfg.WriteTimeout,
-		RequiredAcks: kafkago.RequireAll,
-		Async:        false,
+func newTransport(cfg Config, w messageWriter, cmdReaderFn func() messageReader, replyReaderFn func(string) messageReader) *Transport {
+	if w == nil {
+		w = &kafkago.Writer{
+			Addr:         kafkago.TCP(cfg.Brokers...),
+			Balancer:     &kafkago.RoundRobin{},
+			WriteTimeout: cfg.WriteTimeout,
+			RequiredAcks: kafkago.RequireAll,
+			Async:        false,
+		}
 	}
 
 	t := &Transport{
 		cfg:    cfg,
-		writer: writer,
+		writer: w,
 	}
 
-	t.newCommandReader = func() messageReader {
-		return kafkago.NewReader(kafkago.ReaderConfig{
-			Brokers:        cfg.Brokers,
-			Topic:          cfg.CommandTopic,
-			GroupID:        cfg.ConsumerGroup,
-			MaxBytes:       cfg.MaxBytes,
-			CommitInterval: cfg.CommitInterval,
-			StartOffset:    kafkago.LastOffset,
-		})
+	if cmdReaderFn != nil {
+		t.newCommandReader = cmdReaderFn
+	} else {
+		t.newCommandReader = func() messageReader {
+			return kafkago.NewReader(kafkago.ReaderConfig{
+				Brokers:        cfg.Brokers,
+				Topic:          cfg.CommandTopic,
+				GroupID:        cfg.ConsumerGroup,
+				MaxBytes:       cfg.MaxBytes,
+				CommitInterval: cfg.CommitInterval,
+				StartOffset:    kafkago.LastOffset,
+			})
+		}
 	}
 
-	t.newReplyReader = func(groupID string) messageReader {
-		return kafkago.NewReader(kafkago.ReaderConfig{
-			Brokers:        cfg.Brokers,
-			Topic:          cfg.ReplyTopic,
-			GroupID:        groupID,
-			MaxBytes:       cfg.MaxBytes,
-			CommitInterval: cfg.CommitInterval,
-			StartOffset:    kafkago.LastOffset,
-		})
+	if replyReaderFn != nil {
+		t.newReplyReader = replyReaderFn
+	} else {
+		t.newReplyReader = func(groupID string) messageReader {
+			return kafkago.NewReader(kafkago.ReaderConfig{
+				Brokers:        cfg.Brokers,
+				Topic:          cfg.ReplyTopic,
+				GroupID:        groupID,
+				MaxBytes:       cfg.MaxBytes,
+				CommitInterval: cfg.CommitInterval,
+				StartOffset:    kafkago.LastOffset,
+			})
+		}
 	}
 
 	return t
@@ -265,67 +351,6 @@ func (t *Transport) readReplies(ctx context.Context) {
 			}
 		}
 	}
-}
-
-func ensureTopics(cfg Config) error {
-	conn, err := kafkago.Dial("tcp", cfg.Brokers[0])
-	if err != nil {
-		return fmt.Errorf("dial broker: %w", err)
-	}
-	defer func() { _ = conn.Close() }()
-
-	controller, err := conn.Controller()
-	if err != nil {
-		return fmt.Errorf("get controller: %w", err)
-	}
-
-	controllerConn, err := kafkago.Dial("tcp", net.JoinHostPort(controller.Host, strconv.Itoa(controller.Port)))
-	if err != nil {
-		return fmt.Errorf("dial controller: %w", err)
-	}
-	defer func() { _ = controllerConn.Close() }()
-
-	topics := []kafkago.TopicConfig{
-		{
-			Topic:             cfg.CommandTopic,
-			NumPartitions:     cfg.NumPartitions,
-			ReplicationFactor: cfg.ReplicationFactor,
-		},
-		{
-			Topic:             cfg.ReplyTopic,
-			NumPartitions:     cfg.NumPartitions,
-			ReplicationFactor: cfg.ReplicationFactor,
-		},
-	}
-
-	return controllerConn.CreateTopics(topics...)
-}
-
-func checkTopicsExist(cfg Config) error {
-	conn, err := kafkago.Dial("tcp", cfg.Brokers[0])
-	if err != nil {
-		return fmt.Errorf("dial broker: %w", err)
-	}
-	defer func() { _ = conn.Close() }()
-
-	partitions, err := conn.ReadPartitions()
-	if err != nil {
-		return fmt.Errorf("read partitions: %w", err)
-	}
-
-	existing := make(map[string]bool)
-	for _, p := range partitions {
-		existing[p.Topic] = true
-	}
-
-	if !existing[cfg.CommandTopic] {
-		return fmt.Errorf("%w: %s", ErrTopicNotFound, cfg.CommandTopic)
-	}
-	if !existing[cfg.ReplyTopic] {
-		return fmt.Errorf("%w: %s", ErrTopicNotFound, cfg.ReplyTopic)
-	}
-
-	return nil
 }
 
 func generateInstanceID() string {
