@@ -176,6 +176,8 @@ func main() {
 		CommandTopic:     "orders.commands",
 		ReplyTopic:       "orders.replies",
 		AutoCreateTopics: true,
+		// ConsumerGroup не нужен — клиент только отправляет команды
+		// и получает ответы через автоматически созданную группу.
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -517,7 +519,7 @@ transport, err := kafkatransport.New(kafkatransport.Config{
 | `Brokers` | Адреса Kafka-брокеров | Обязателен |
 | `CommandTopic` | Топик для команд | Обязателен |
 | `ReplyTopic` | Топик для ответов | Обязателен |
-| `ConsumerGroup` | Consumer group для серверной стороны | Обязателен для `Subscribe` |
+| `ConsumerGroup` | Consumer group для серверной стороны (`Subscribe`). Не требуется если транспорт используется только для клиента. Для `SubscribeReplies` уникальная группа генерируется автоматически. | Обязателен для `Subscribe` |
 | `AutoCreateTopics` | Автоматическое создание топиков | `false` |
 | `NumPartitions` | Количество партиций (при автосоздании) | `1` |
 | `ReplicationFactor` | Фактор репликации (при автосоздании) | `1` |
@@ -528,9 +530,16 @@ transport, err := kafkatransport.New(kafkatransport.Config{
 #### Топология
 
 - **Один command-топик** — все клиенты пишут команды в один топик, серверы читают в одной consumer group.
-- **Один reply-топик** — каждый клиентский инстанс создаёт уникальную consumer group для получения всех ответов, фильтрация по `correlation_id` происходит автоматически.
+- **Один reply-топик** — каждый клиентский инстанс получает все ответы, фильтрация по `correlation_id` происходит автоматически.
 - Масштабирование серверов — добавление инстансов в consumer group, Kafka распределяет партиции.
 - Если нужна изоляция по типам команд — создайте несколько транспортов с разными топиками.
+
+#### Reply Consumer Group
+
+Каждый клиентский инстанс автоматически создаёт уникальную consumer group
+для reply-топика (`{ReplyTopic}-{instance_id}`). Это гарантирует, что каждый
+инстанс получает все ответы и может найти свои по `correlation_id`.
+Настройка не требуется.
 
 #### Автосоздание топиков
 
