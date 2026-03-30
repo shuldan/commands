@@ -8,7 +8,7 @@
 клиентом, обрабатывается сервером, а результат доставляется обратно через `Future`. Ответ может быть отправлен
 как синхронно (в момент обработки), так и асинхронно — позже, из другой горутины или даже другого процесса.
 Использует дженерики для типобезопасности на этапе компиляции, абстрагируется от конкретного транспорта
-(NATS, RabbitMQ, in-memory).
+(Kafka, NATS, RabbitMQ, in-memory).
 
 ---
 
@@ -31,6 +31,16 @@
 
 ```sh
 go get github.com/shuldan/commands
+```
+
+### Транспорты
+
+```sh
+# In-memory (для тестов и single-process)
+# Входит в основной модуль, дополнительная установка не требуется.
+
+# Kafka
+go get github.com/shuldan/commands/transport/kafka
 ```
 
 ---
@@ -122,6 +132,81 @@ func main() {
 
 ---
 
+## Быстрый старт: Kafka
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/shuldan/commands"
+	jsoncodec "github.com/shuldan/commands/codec/json"
+	kafkatransport "github.com/shuldan/commands/transport/kafka"
+)
+
+func main() {
+	// --- Серверная сторона (обработчик команд) ---
+
+	serverTransport, err := kafkatransport.New(kafkatransport.Config{
+		Brokers:          []string{"localhost:9092"},
+		CommandTopic:     "orders.commands",
+		ReplyTopic:       "orders.replies",
+		ConsumerGroup:    "orders-service",
+		AutoCreateTopics: true,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	codec := jsoncodec.New()
+
+	server, _ := commands.NewCommandServer(serverTransport, codec)
+	commands.Register[CreateOrder](server, &CreateOrderHandler{})
+	server.Open(context.Background())
+	defer server.Close(context.Background())
+
+	// --- Клиентская сторона (отправитель команд) ---
+
+	clientTransport, err := kafkatransport.New(kafkatransport.Config{
+		Brokers:          []string{"localhost:9092"},
+		CommandTopic:     "orders.commands",
+		ReplyTopic:       "orders.replies",
+		AutoCreateTopics: true,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	client, _ := commands.NewCommandClient(clientTransport, codec,
+		commands.WithTimeout(10*time.Second),
+	)
+	client.Open(context.Background())
+	defer client.Close(context.Background())
+
+	future, err := commands.Send[CreateOrderResult](context.Background(), client, CreateOrder{
+		OrderID: "order-1",
+		UserID:  "user-42",
+		Amount:  199.90,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	result, err := future.Await(context.Background())
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("Order %s status: %s\n", result.OrderID, result.Status)
+}
+```
+
+---
+
 ## Асинхронный ответ (отложенная обработка)
 
 Главная особенность библиотеки — ответ на команду не обязан отправляться в момент обработки.
@@ -184,46 +269,6 @@ func (w *OrderApprovalWorker) OnRejected(ctx context.Context, orderID string, re
 		Code:    "ORDER_REJECTED",
 		Message: reason,
 	})
-}
-```
-
-### Подключение
-
-```go
-func main() {
-	transport := nats.NewTransport(conn, nats.WithSubjectPrefix("commands"))
-	codec := jsoncodec.New()
-
-	// Сервер — принимает команды.
-	server, _ := commands.NewCommandServer(transport, codec)
-	commands.Register[CreateOrder](server, &CreateOrderHandler{repo: repo})
-	server.Open(context.Background())
-
-	// Воркер — отправляет ответы позже.
-	worker := &OrderApprovalWorker{
-		repo:      repo,
-		transport: transport,
-		codec:     codec,
-	}
-
-	// Клиент — отправляет команды и ждёт результат.
-	client, _ := commands.NewCommandClient(transport, codec,
-		commands.WithTimeout(5*time.Minute), // длительный таймаут для асинхронной обработки
-	)
-	client.Open(context.Background())
-
-	future, _ := commands.Send[CreateOrderResult](context.Background(), client, CreateOrder{
-		OrderID: "order-1",
-		UserID:  "user-42",
-		Amount:  199.90,
-	})
-
-	// Клиент ждёт — ответ придёт когда воркер вызовет reply.Send().
-	result, err := future.Await(context.Background())
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("Order %s status: %s\n", result.OrderID, result.Status)
 }
 ```
 
@@ -422,45 +467,6 @@ future, err := commands.Send[R](ctx, client, cmd,
 
 ---
 
-## Жизненный цикл
-
-### Порядок вызовов
-
-| | Client | Server |
-|---|---|---|
-| **New** | Создание объекта | Создание объекта |
-| **Register** | — | Регистрация хендлеров |
-| **Open** | Подписка на reply-очередь | Подписка на команды |
-| **Send / Handle** | Отправка команд | Обработка команд |
-| **Close** | Отмена pending futures, отписка | Drain хендлеров, отписка |
-
-`Register` вызывается до `Open`. Вызов `Register` после `Open` возвращает `ErrServerStarted`.
-
-### Graceful shutdown
-
-**Сервер** — `Close(ctx)` прекращает приём новых команд и ожидает завершения активных хендлеров.
-Отложенные ответы (сохранённые `ReplyAddress`) продолжают работать после перезапуска сервиса —
-достаточно создать `NewReplySender` с тем же транспортом.
-
-```go
-ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-defer cancel()
-
-if err := server.Close(ctx); err != nil {
-    // context.DeadlineExceeded — не все хендлеры завершились вовремя
-}
-```
-
-**Клиент** — `Close(ctx)` отменяет все pending futures с ошибкой `ErrClientClosed`:
-
-```go
-if err := client.Close(ctx); err != nil {
-    // ошибка закрытия транспорта
-}
-```
-
----
-
 ## Транспорт
 
 Библиотека абстрагируется от конкретного брокера через интерфейс `Transport`:
@@ -489,20 +495,68 @@ import "github.com/shuldan/commands/transport/memory"
 transport := memory.New()
 ```
 
-### Интеграция с брокером (пример)
+### Kafka транспорт
+
+Для распределённых систем на базе Apache Kafka:
 
 ```go
-// NATS
-transport := nats.NewTransport(conn,
-    nats.WithSubjectPrefix("commands"),
-)
+import kafkatransport "github.com/shuldan/commands/transport/kafka"
 
-// RabbitMQ
-transport := rabbitmq.NewTransport(conn,
-    rabbitmq.WithExchange("commands"),
-    rabbitmq.WithReplyQueue("reply.orders-service-1"),
-)
+transport, err := kafkatransport.New(kafkatransport.Config{
+    Brokers:       []string{"localhost:9092", "localhost:9093"},
+    CommandTopic:  "orders.commands",
+    ReplyTopic:    "orders.replies",
+    ConsumerGroup: "orders-service",  // обязателен для серверной стороны
+})
 ```
+
+#### Конфигурация Kafka транспорта
+
+| Параметр | Описание | По умолчанию |
+|---|---|---|
+| `Brokers` | Адреса Kafka-брокеров | Обязателен |
+| `CommandTopic` | Топик для команд | Обязателен |
+| `ReplyTopic` | Топик для ответов | Обязателен |
+| `ConsumerGroup` | Consumer group для серверной стороны | Обязателен для `Subscribe` |
+| `AutoCreateTopics` | Автоматическое создание топиков | `false` |
+| `NumPartitions` | Количество партиций (при автосоздании) | `1` |
+| `ReplicationFactor` | Фактор репликации (при автосоздании) | `1` |
+| `MaxBytes` | Максимальный размер batch от consumer | `1MB` |
+| `CommitInterval` | Интервал коммита офсетов (`0` = синхронный) | `0` |
+| `WriteTimeout` | Таймаут записи producer | `10s` |
+
+#### Топология
+
+- **Один command-топик** — все клиенты пишут команды в один топик, серверы читают в одной consumer group.
+- **Один reply-топик** — каждый клиентский инстанс создаёт уникальную consumer group для получения всех ответов, фильтрация по `correlation_id` происходит автоматически.
+- Масштабирование серверов — добавление инстансов в consumer group, Kafka распределяет партиции.
+- Если нужна изоляция по типам команд — создайте несколько транспортов с разными топиками.
+
+#### Автосоздание топиков
+
+По умолчанию выключено. Если топик не существует — транспорт возвращает ошибку при создании.
+Для dev-окружения можно включить:
+
+```go
+transport, err := kafkatransport.New(kafkatransport.Config{
+    Brokers:           []string{"localhost:9092"},
+    CommandTopic:      "orders.commands",
+    ReplyTopic:        "orders.replies",
+    AutoCreateTopics:  true,
+    NumPartitions:     3,
+    ReplicationFactor: 1,
+})
+```
+
+В production рекомендуется создавать топики через IaC (Terraform, Helm) с нужными параметрами.
+
+#### Сериализация в Kafka
+
+Метаданные envelope (`message_id`, `correlation_id`, `command_name`, `reply_to`, `result_name`, `error`) передаются в Kafka Headers. Payload команды или результата — в Value сообщения. Пользовательские заголовки из `Headers` map передаются с префиксом `x-`.
+
+#### Гарантии доставки
+
+At-least-once. Если ответ потерян — клиент получит `ErrTimeout`. Идемпотентность — ответственность бизнес-логики.
 
 ---
 
@@ -571,6 +625,45 @@ if err != nil {
 | `ErrNotOpened` | Вызов `Send`/`Close` до `Open` |
 | `ErrAlreadyRegistered` | Дублирование хендлера для одной команды |
 | `ErrServerStarted` | Регистрация хендлера после `Open` |
+
+---
+
+## Жизненный цикл
+
+### Порядок вызовов
+
+| | Client | Server |
+|---|---|---|
+| **New** | Создание объекта | Создание объекта |
+| **Register** | — | Регистрация хендлеров |
+| **Open** | Подписка на reply-очередь | Подписка на команды |
+| **Send / Handle** | Отправка команд | Обработка команд |
+| **Close** | Отмена pending futures, отписка | Drain хендлеров, отписка |
+
+`Register` вызывается до `Open`. Вызов `Register` после `Open` возвращает `ErrServerStarted`.
+
+### Graceful shutdown
+
+**Сервер** — `Close(ctx)` прекращает приём новых команд и ожидает завершения активных хендлеров.
+Отложенные ответы (сохранённые `ReplyAddress`) продолжают работать после перезапуска сервиса —
+достаточно создать `NewReplySender` с тем же транспортом.
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+defer cancel()
+
+if err := server.Close(ctx); err != nil {
+    // context.DeadlineExceeded — не все хендлеры завершились вовремя
+}
+```
+
+**Клиент** — `Close(ctx)` отменяет все pending futures с ошибкой `ErrClientClosed`:
+
+```go
+if err := client.Close(ctx); err != nil {
+    // ошибка закрытия транспорта
+}
+```
 
 ---
 
@@ -795,7 +888,7 @@ func TestIntegration_AsyncReply(t *testing.T) {
        ▼
   ┌──────────────────────────────────────────────────────────────┐
   │                         Transport                            │
-  │              (NATS, RabbitMQ, In-Memory, ...)                │
+  │            (Kafka, NATS, RabbitMQ, In-Memory, ...)           │
   └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -813,6 +906,20 @@ go test ./...
 
 ```sh
 go test -race ./...
+```
+
+### Запуск Kafka для интеграционных тестов
+
+```sh
+docker run -d --name kafka \
+  -p 9092:9092 \
+  -e KAFKA_CFG_NODE_ID=0 \
+  -e KAFKA_CFG_PROCESS_ROLES=controller,broker \
+  -e KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093 \
+  -e KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT \
+  -e KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=0@localhost:9093 \
+  -e KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER \
+  bitnami/kafka:latest
 ```
 
 ---
